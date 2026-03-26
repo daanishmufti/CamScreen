@@ -1,169 +1,95 @@
 import cv2
 import numpy as np
-import settings as _settings
-
-# Minimum quad size as fractions of the frame dimensions
-MIN_QUAD_W_FRAC = 0.15
-MIN_QUAD_H_FRAC = 0.10
-
-# Angle thresholds (degrees) used to classify segments as horizontal or vertical
-LSD_H_MAX_DEG = 30
-LSD_V_MIN_DEG = 60
-
-# Defaults used when settings are not yet loaded
-LSD_V_CANDIDATES = 8
-LSD_V_MATCH_TOL = 0.30
-
-
-
+import settings as _s
 
 def compute_edges(frame):
     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
     blurred = cv2.GaussianBlur(gray, (5, 5), 0)
-    sobel_x = cv2.Sobel(blurred, cv2.CV_32F, 1, 0, ksize=3)
-    sobel_y = cv2.Sobel(blurred, cv2.CV_32F, 0, 1, ksize=3)
-    edge_strength = cv2.magnitude(sobel_x, sobel_y)
-    edge_strength = cv2.normalize(edge_strength, None, 0, 255, cv2.NORM_MINMAX)
-    return edge_strength.astype(np.uint8)
+    sx = cv2.Sobel(blurred, cv2.CV_32F, 1, 0, ksize=3)
+    sy = cv2.Sobel(blurred, cv2.CV_32F, 0, 1, ksize=3)
+    mag = cv2.magnitude(sx, sy)
+    return cv2.normalize(mag, None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8)
 
-
-def _run_lsd(edge_map):
-    lsd = cv2.createLineSegmentDetector(0)
-    detected_lines, *_ = lsd.detect(edge_map)
-    if detected_lines is None:
-        return np.empty((0, 4), dtype=np.float32)
-    return detected_lines.reshape(-1, 4)
-
-
-def _seg_length(seg):
-    x1, y1, x2, y2 = seg
-    return float(np.hypot(x2 - x1, y2 - y1))
-
-
-def _seg_angle_deg(seg):
-    x1, y1, x2, y2 = seg
-    return float(np.degrees(np.arctan2(y2 - y1, x2 - x1)) % 180)
-
-
-def _classify_segs(segs):
-    min_vertical_angle = float(_settings.get("lsd_v_min_deg") or LSD_V_MIN_DEG)
-    horizontal_lines = []
-    vertical_lines = []
-
-    for line in segs:
-        angle = _seg_angle_deg(line)
-        if angle <= LSD_H_MAX_DEG or angle >= 180 - LSD_H_MAX_DEG:
-            horizontal_lines.append(line)
-        elif min_vertical_angle <= angle <= 180 - min_vertical_angle:
-            vertical_lines.append(line)
-
-    horizontal_lines.sort(key=_seg_length, reverse=True)
-    vertical_lines.sort(key=_seg_length, reverse=True)
-    return horizontal_lines, vertical_lines
-
-
-def _pick_v_pair(v_segs, frame_width):
-    max_candidates = int(_settings.get("lsd_v_candidates") or LSD_V_CANDIDATES)
-    match_tolerance = float(_settings.get("lsd_v_match_tol") or LSD_V_MATCH_TOL)
-    middle_x = frame_width / 2.0
-
-    left_lines = [line for line in v_segs if (line[0] + line[2]) / 2.0 < middle_x][:max_candidates]
-    right_lines = [line for line in v_segs if (line[0] + line[2]) / 2.0 >= middle_x][:max_candidates]
-
-    if not left_lines or not right_lines:
+def _detect_v_pair(segs, fw):
+    slen = lambda s: float(np.hypot(s[2] - s[0], s[3] - s[1]))
+    min_a = float(_s.get("lsd_v_min_deg"))
+    vlines = [s for s in segs if min_a <= float(np.degrees(np.arctan2(s[3]-s[1], s[2]-s[0])) % 180) <= 180 - min_a]
+    vlines.sort(key=slen, reverse=True)
+    n = int(_s.get("lsd_v_candidates"))
+    tol = float(_s.get("lsd_v_match_tol"))
+    mid = fw / 2.0
+    left = [s for s in vlines if (s[0]+s[2])/2.0 < mid][:n]
+    right = [s for s in vlines if (s[0]+s[2])/2.0 >= mid][:n]
+    if not left or not right:
         return None, None
-
-    best_left_line = None
-    best_right_line = None
-    best_average_length = 0.0
-
-    for left_line in left_lines:
-        for right_line in right_lines:
-            left_length = _seg_length(left_line)
-            right_length = _seg_length(right_line)
-            average_length = (left_length + right_length) / 2.0
-            length_difference = abs(left_length - right_length) / max(average_length, 1e-6)
-
-            if length_difference <= match_tolerance and average_length > best_average_length:
-                best_left_line = left_line
-                best_right_line = right_line
-                best_average_length = average_length
-
-    if best_left_line is None:
-        best_left_line = max(left_lines, key=_seg_length)
-        best_right_line = max(right_lines, key=_seg_length)
-
-    return best_left_line, best_right_line
-
+    bl, br, ba = None, None, 0.0
+    height_tol = 0.05  # 5% height difference allowed
+    def seg_height(s):
+        return abs(s[3] - s[1])
+    for l in left:
+        for r in right:
+            ll, rl = seg_height(l), seg_height(r)
+            avg_h = (ll + rl) / 2.0
+            if avg_h == 0:
+                continue
+            if abs(ll - rl) / avg_h > height_tol:
+                continue
+            len_l, len_r = slen(l), slen(r)
+            a = (len_l + len_r) / 2.0
+            if abs(len_l - len_r) / max(a, 1e-6) <= tol and a > ba:
+                bl, br, ba = l, r, a
+    if bl is None:
+        bl, br = max(left, key=slen), max(right, key=slen)
+    return bl, br
 
 def lsd_lines_vis(edge_map):
-    frame_height, frame_width = edge_map.shape[:2]
-    segs = _run_lsd(edge_map)
+    h, w = edge_map.shape[:2]
+    raw, *_ = cv2.createLineSegmentDetector(0).detect(edge_map)
+    segs = raw.reshape(-1, 4) if raw is not None else np.empty((0, 4), dtype=np.float32)
     vis = cv2.cvtColor(edge_map, cv2.COLOR_GRAY2BGR)
-
-    for line in segs:
-        x1, y1, x2, y2 = int(line[0]), int(line[1]), int(line[2]), int(line[3])
-        cv2.line(vis, (x1, y1), (x2, y2), (55, 55, 55), 1)
-
-    _, vertical_lines = _classify_segs(segs)
-    left_line, right_line = _pick_v_pair(vertical_lines, frame_width)
-
-    if left_line is not None:
-        x1, y1, x2, y2 = int(left_line[0]), int(left_line[1]), int(left_line[2]), int(left_line[3])
-        cv2.line(vis, (x1, y1), (x2, y2), (0, 255, 0), 2)
-    if right_line is not None:
-        x1, y1, x2, y2 = int(right_line[0]), int(right_line[1]), int(right_line[2]), int(right_line[3])
-        cv2.line(vis, (x1, y1), (x2, y2), (0, 200, 80), 2)
+    for s in segs:
+        cv2.line(vis, (int(s[0]), int(s[1])), (int(s[2]), int(s[3])), (55, 55, 55), 1)
+    ll, rl = _detect_v_pair(segs, w)
+    if ll is not None:
+        cv2.line(vis, (int(ll[0]), int(ll[1])), (int(ll[2]), int(ll[3])), (0, 255, 0), 2)
+    if rl is not None:
+        cv2.line(vis, (int(rl[0]), int(rl[1])), (int(rl[2]), int(rl[3])), (0, 200, 80), 2)
     return vis
 
-
 def find_screen_quad(frame, edge_mask=None):
-    frame_height, frame_width = frame.shape[:2]
+    h, w = frame.shape[:2]
     if edge_mask is None:
         edge_mask = compute_edges(frame)
-
-    segs = _run_lsd(edge_mask)
-    if len(segs) == 0:
+    raw, *_ = cv2.createLineSegmentDetector(0).detect(edge_mask)
+    if raw is None:
         return None
-
-    _, vertical_lines = _classify_segs(segs)
-    left_line, right_line = _pick_v_pair(vertical_lines, frame_width)
-    if left_line is None or right_line is None:
+    ll, rl = _detect_v_pair(raw.reshape(-1, 4), w)
+    if ll is None or rl is None:
         return None
+    top = lambda ln: (float(ln[0]), float(ln[1])) if ln[1] <= ln[3] else (float(ln[2]), float(ln[3]))
+    bot = lambda ln: (float(ln[2]), float(ln[3])) if ln[3] >= ln[1] else (float(ln[0]), float(ln[1]))
+    clamp = lambda p: (int(max(0, min(w-1, round(p[0])))), int(max(0, min(h-1, round(p[1])))))
+    return [clamp(top(ll)), clamp(top(rl)), clamp(bot(rl)), clamp(bot(ll))]
 
-    def top_point(line):
-        if line[1] <= line[3]:
-            return (float(line[0]), float(line[1]))
-        return (float(line[2]), float(line[3]))
-
-    def bottom_point(line):
-        if line[3] >= line[1]:
-            return (float(line[2]), float(line[3]))
-        return (float(line[0]), float(line[1]))
-
-    top_left = top_point(left_line)
-    top_right = top_point(right_line)
-    bottom_left = bottom_point(left_line)
-    bottom_right = bottom_point(right_line)
-
-    def clamp_point(point):
-        x = int(max(0, min(frame_width - 1, round(point[0]))))
-        y = int(max(0, min(frame_height - 1, round(point[1]))))
-        return (x, y)
-
-    top_left = clamp_point(top_left)
-    top_right = clamp_point(top_right)
-    bottom_right = clamp_point(bottom_right)
-    bottom_left = clamp_point(bottom_left)
-    return [top_left, top_right, bottom_right, bottom_left]
-
-
-def validate_quad(quad, frame_shape):
+def validate_quad(quad, shape):
     if quad is None:
         return 'no_laptop'
-    top_left, top_right, bottom_right, bottom_left = quad
-    if top_right[0] - top_left[0] < frame_shape[1] * MIN_QUAD_W_FRAC:
+    tl, tr, br, bl = quad
+    w = np.linalg.norm(np.array(tr) - np.array(tl))
+    h = np.linalg.norm(np.array(bl) - np.array(tl))
+    if w < shape[1] * 0.15 or h < shape[0] * 0.10:
         return 'no_laptop'
-    if bottom_left[1] - top_left[1] < frame_shape[0] * MIN_QUAD_H_FRAC:
+    # Aspect ratio check (screen-like)
+    aspect = w / max(h, 1e-6)
+    if aspect < 1.0 or aspect > 2.5:
+        return 'no_laptop'
+    # Angle check (should be close to rectangle)
+    def angle(a, b, c):
+        ab = np.array(b) - np.array(a)
+        cb = np.array(b) - np.array(c)
+        cos_angle = np.dot(ab, cb) / (np.linalg.norm(ab) * np.linalg.norm(cb) + 1e-6)
+        return np.degrees(np.arccos(np.clip(cos_angle, -1.0, 1.0)))
+    angles = [angle(tl, tr, br), angle(tr, br, bl), angle(br, bl, tl), angle(bl, tl, tr)]
+    if any(abs(a - 90) > 25 for a in angles):
         return 'no_laptop'
     return 'ok'
