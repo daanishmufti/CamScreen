@@ -2,19 +2,12 @@ import cv2
 import numpy as np
 import settings as _settings
 
-# Minimum quad size as fractions of the frame dimensions
 MIN_QUAD_W_FRAC = 0.15
 MIN_QUAD_H_FRAC = 0.10
-
-# Angle thresholds (degrees) used to classify segments as horizontal or vertical
 LSD_H_MAX_DEG = 30
 LSD_V_MIN_DEG = 60
-
-# Defaults used when settings are not yet loaded
 LSD_V_CANDIDATES = 8
 LSD_V_MATCH_TOL = 0.30
-
-
 
 
 def compute_edges(frame):
@@ -97,7 +90,7 @@ def _pick_v_pair(v_segs, frame_width):
 
 
 def lsd_lines_vis(edge_map):
-    frame_height, frame_width = edge_map.shape[:2]
+    frame_width = edge_map.shape[1]
     segs = _run_lsd(edge_map)
     vis = cv2.cvtColor(edge_map, cv2.COLOR_GRAY2BGR)
 
