@@ -8,7 +8,7 @@ from detector_logic import (
     validate_quad,
 )
 from transform import four_points_transform
-from state import State
+
 from gui import show_windows
 from quad import make_quad_filter
 from screen_state import get_state_image
@@ -49,7 +49,7 @@ def run_screen_detector():
     previous_time = time.time()
     quad_filter = make_quad_filter()
 
-    state = State.SEARCHING
+    state_searching = True  
     next_retry = 0.0
     alert_msg = 'Place laptop in view'
     lock_start_time = None
@@ -58,7 +58,7 @@ def run_screen_detector():
         if settings.get("_reset_flag"):
             settings.set_val("_reset_flag", False)
             quad_filter = make_quad_filter()
-            state = State.SEARCHING
+            state_searching = True
             alert_msg = 'Place laptop in view'
             lock_start_time = None
 
@@ -68,7 +68,7 @@ def run_screen_detector():
             camera_index = new_camera_index
             camera = cv2.VideoCapture(camera_index)
             quad_filter = make_quad_filter()
-            state = State.SEARCHING
+            state_searching = True
             alert_msg = 'Place laptop in view'
             lock_start_time = None
 
@@ -97,33 +97,33 @@ def run_screen_detector():
         edge_map = compute_edges(frame)
         lsd_vis = lsd_lines_vis(edge_map)
 
-        if state == State.TRACKING:
+        if not state_searching:
             quad = find_screen_quad(frame, edge_mask=edge_map)
             status = validate_quad(quad, frame.shape)
 
             if status == 'ok':
                 smoothed = quad_filter(quad)
                 if smoothed is None:
-                    state = State.SEARCHING
+                    state_searching = True
                     next_retry = current_time
                     alert_msg = 'Reacquiring...'
                     quad_filter = make_quad_filter()
                     lock_start_time = None
             else:
-                state = State.SEARCHING
+                state_searching = True
                 next_retry = current_time
                 alert_msg = 'Place laptop in view' if status == 'no_laptop' else 'Reposition laptop'
                 quad_filter = make_quad_filter()
                 smoothed = None
                 lock_start_time = None
 
-        if state == State.SEARCHING:
+        if state_searching:
             smoothed = None
             if current_time >= next_retry:
                 quad = find_screen_quad(frame, edge_mask=edge_map)
                 status = validate_quad(quad, frame.shape)
                 if status == 'ok':
-                    state = State.TRACKING
+                    state_searching = False
                     alert_msg = ''
                     quad_filter = make_quad_filter()
                     smoothed = quad_filter(quad)
@@ -176,7 +176,7 @@ def run_screen_detector():
         _last_warped = warped_display
         _last_state = state_img
 
-        det_status = f"State: {state.value}"
+        det_status = f"State: {'SEARCHING' if state_searching else 'TRACKING'}"
         if alert_msg:
             det_status += f"  —  {alert_msg}"
 
