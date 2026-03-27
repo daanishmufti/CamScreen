@@ -1,7 +1,8 @@
 import numpy as np
 from collections import deque
 
-def new_filter(alpha=0.18, buf_len=5, max_move=0.18):
+#def new_filter(alpha=0.18, buf_len=5, max_move=0.18):
+def new_filter(alpha=0.08, buf_len=10, max_move=0.18):
     return {"alpha": alpha, "buf": deque(maxlen=buf_len), "prev": None, "max_move": max_move}
 
 def update_filter(f, detected):

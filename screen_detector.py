@@ -20,8 +20,8 @@ def run_screen_detector():
     cam = cv2.VideoCapture(cam_idx)
     prev_t = time.time()
     qf = new_filter()
-    lock_until = 0.0   # end time of the 2s lock-in countdown
-    locked_in = False  # True once the 2s timer has elapsed
+    lock_until = 0.0  
+    locked_in = False  
 
     while True:
         if settings.get("_reset_flag"):
@@ -62,7 +62,6 @@ def run_screen_detector():
                 exceeded = np.max(np.linalg.norm(det - prev_pts, axis=1)) > max(4.0, w * max_move)
 
             if exceeded:
-                # Moved too far: drop lock and show no detection
                 lock_until = 0.0
                 locked_in = False
                 qf = new_filter()
@@ -98,7 +97,8 @@ def run_screen_detector():
             for p in smoothed:
                 cv2.circle(frame, p, 5, (0, 255, 0), -1)
             warped = four_points_transform(frame, np.array(smoothed, dtype=np.float32))
-            # Show countdown in middle of warped only during the 2s lock-in timer
+            from screen_state import show_state_window
+            show_state_window(warped)
             if not locked_in and lock_until > now:
                 remaining = int(lock_until - now) + 1
                 timer_msg = f'Locking in: {remaining}s'

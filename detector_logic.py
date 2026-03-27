@@ -23,11 +23,19 @@ def _detect_v_pair(segs, fw):
     if not left or not right:
         return None, None
     bl, br, ba = None, None, 0.0
-    height_tol = 0.05  # 5% height difference allowed
+    height_tol = 0.05 
+    parallel_angle_tol = 2.0  
+    def seg_angle(s):
+        return float(np.degrees(np.arctan2(s[3]-s[1], s[2]-s[0])) % 180)
     def seg_height(s):
         return abs(s[3] - s[1])
     for l in left:
         for r in right:
+            angle_diff = abs(seg_angle(l) - seg_angle(r))
+            if angle_diff > 90:
+                angle_diff = 180 - angle_diff
+            if angle_diff > parallel_angle_tol:
+                continue
             ll, rl = seg_height(l), seg_height(r)
             avg_h = (ll + rl) / 2.0
             if avg_h == 0:
@@ -79,11 +87,9 @@ def validate_quad(quad, shape):
     h = np.linalg.norm(np.array(bl) - np.array(tl))
     if w < shape[1] * 0.15 or h < shape[0] * 0.10:
         return 'no_laptop'
-    # Aspect ratio check (screen-like)
     aspect = w / max(h, 1e-6)
     if aspect < 1.0 or aspect > 2.5:
         return 'no_laptop'
-    # Angle check (should be close to rectangle)
     def angle(a, b, c):
         ab = np.array(b) - np.array(a)
         cb = np.array(b) - np.array(c)
