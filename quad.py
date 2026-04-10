@@ -1,34 +1,22 @@
 import numpy as np
 from collections import deque
 
+#def new_filter(alpha=0.18, buf_len=5, max_move=0.18):
+def new_filter(alpha=0.08, buf_len=25, max_move=0.18):
+    return {"alpha": alpha, "buf": deque(maxlen=buf_len), "prev": None, "max_move": max_move}
 
-def make_quad_filter(alpha=0.25, median_len=5, max_reset_frac=0.45):
-    alpha = float(alpha)
-    max_reset_frac = float(max_reset_frac)
-    buf = deque(maxlen=int(median_len))
-    prev = [None]
-
-    def update(detected):
-        if detected is None:
-            return None if prev[0] is None else [tuple(p) for p in prev[0].astype(int)]
-
-        q = np.array(detected, dtype=np.float32)
-        buf.append(q)
-
-        if prev[0] is None:
-            prev[0] = np.median(np.stack(buf), axis=0) if len(buf) >= 2 else q.copy()
-            return [tuple(p) for p in prev[0].astype(int)]
-
-        quad_width = np.linalg.norm(prev[0][0] - prev[0][1])
-        max_reset_px = max(8.0, quad_width * max_reset_frac)
-        jump = np.max(np.linalg.norm(q - prev[0], axis=1))
-
-        if jump > max_reset_px:
-            prev[0] = None
-            buf.clear()
-            return None
-
-        prev[0] = (1.0 - alpha) * prev[0] + alpha * q
-        return [tuple(p) for p in prev[0].astype(int)]
-
-    return update
+def update_filter(f, detected):
+    if detected is None:
+        if f["prev"] is None and len(f["buf"]) == f["buf"].maxlen:
+            f["prev"] = np.median(np.stack(f["buf"]), axis=0)
+        return None if f["prev"] is None else [tuple(p) for p in f["prev"].astype(int)]
+    det = np.array(detected, dtype=np.float32)
+    f["buf"].append(det)
+    if f["prev"] is None:
+        f["prev"] = np.median(np.stack(f["buf"]), axis=0) if len(f["buf"]) >= 2 else det.copy()
+        return [tuple(p) for p in f["prev"].astype(int)]
+    w = np.linalg.norm(f["prev"][0] - f["prev"][1])
+    if np.max(np.linalg.norm(det - f["prev"], axis=1)) > max(4.0, w * f["max_move"]):
+        return [tuple(p) for p in f["prev"].astype(int)]
+    f["prev"] = (1.0 - f["alpha"]) * f["prev"] + f["alpha"] * det
+    return [tuple(p) for p in f["prev"].astype(int)]

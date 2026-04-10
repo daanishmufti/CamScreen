@@ -1,96 +1,124 @@
-import cv2
-import time
-import numpy as np
-from detector_logic import compute_edges, find_screen_quad, validate_quad
+import cv2, time, numpy as np
+from detector_logic import compute_edges, lsd_lines_vis, find_screen_quad, validate_quad
 from transform import four_points_transform
-from quad import make_quad_filter
+def show_windows(frame, lsd=None, warped=None):
+    cv2.imshow("Camera", frame)
+    if lsd is not None:
+        cv2.imshow("LSD", lsd)
+    if warped is not None:
+        cv2.imshow("Warped", cv2.resize(warped, (800, 600), interpolation=cv2.INTER_LINEAR))
+    key = cv2.waitKey(1) & 0xFF
+    if key in (ord('q'), 27):
+        cv2.destroyAllWindows()
+        return False
+    return True
+from quad import new_filter, update_filter
 import settings
 
-RETRY_INTERVAL = 1.0
-LOCK_ON_DURATION = 2.0
-
 def run_screen_detector():
-    camera = cv2.VideoCapture(settings.camera_index)
-    previous_time = time.time()
-    quad_filter = make_quad_filter()
-
-    state_searching = True
-    next_retry = 0.0
-    lock_start_time = None
+    cam_idx = settings.get("camera_index")
+    cam = cv2.VideoCapture(cam_idx)
+    prev_t = time.time()
+    qf = new_filter()
+    lock_until = 0.0  
+    locked_in = False  
 
     while True:
-        got_frame, frame = camera.read()
-        if not got_frame:
+        if settings.get("_reset_flag"):
+            settings.set_val("_reset_flag", False)
+            qf = new_filter()
+            lock_until = 0.0
+            locked_in = False
+
+        new_idx = settings.get("camera_index")
+        if new_idx != cam_idx:
+            cam.release()
+            cam_idx = new_idx
+            cam = cv2.VideoCapture(cam_idx)
+            qf = new_filter()
+
+        ok, frame = cam.read()
+        if not ok:
             break
 
-        current_time = time.time()
-        fps = 1.0 / max(current_time - previous_time, 1e-9)
-        previous_time = current_time
+        now = time.time()
+        fps = 1.0 / max(now - prev_t, 1e-9)
+        prev_t = now
+        cv2.putText(frame, f"FPS: {fps:.1f}", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 255, 0), 2)
 
-        edge_map = compute_edges(frame)
+        edges = compute_edges(frame)
+        lsd_vis = lsd_lines_vis(edges)
 
-        if not state_searching:
-            quad = find_screen_quad(frame, edge_mask=edge_map)
-            status = validate_quad(quad, frame.shape)
+        quad = find_screen_quad(frame, edge_mask=edges)
+        valid = validate_quad(quad, frame.shape) == 'ok'
 
-            if status == 'ok':
-                smoothed = quad_filter(quad)
-                if smoothed is None:
-                    state_searching = True
-                    next_retry = current_time
-                    quad_filter = make_quad_filter()
-                    lock_start_time = None
-            else:
-                state_searching = True
-                next_retry = current_time
-                quad_filter = make_quad_filter()
+        if valid:
+            prev_pts = qf.get("prev")
+            exceeded = False
+            if prev_pts is not None:
+                det = np.array(quad, dtype=np.float32)
+                w = np.linalg.norm(prev_pts[0] - prev_pts[1])
+                exceeded = np.max(np.linalg.norm(det - prev_pts, axis=1)) > max(4.0, w * qf["max_move"])
+
+            if exceeded:
+                lock_until = 0.0
+                locked_in = False
+                qf = new_filter()
                 smoothed = None
-                lock_start_time = None
-
-        if state_searching:
-            smoothed = None
-            if current_time >= next_retry:
-                quad = find_screen_quad(frame, edge_mask=edge_map)
-                status = validate_quad(quad, frame.shape)
-                if status == 'ok':
-                    state_searching = False
-                    quad_filter = make_quad_filter()
-                    smoothed = quad_filter(quad)
-                    lock_start_time = current_time
+                alert = 'No laptop detected'
+            else:
+                smoothed = update_filter(qf, quad)
+                if not locked_in:
+                    if lock_until == 0.0:
+                        lock_until = now + 2.0
+                    if now >= lock_until:
+                        locked_in = True
+                        alert = 'Screen detected'
+                    else:
+                        alert = f'Locking in ({int(lock_until - now) + 1}s)'
                 else:
-                    next_retry = current_time + RETRY_INTERVAL
-
-        warped = None
-        if smoothed is not None:
-            warped = four_points_transform(frame, np.array(smoothed, dtype=np.float32))
-
-        lock_remaining = max(0.0, LOCK_ON_DURATION - (current_time - lock_start_time)) if lock_start_time is not None else 0.0
-        locked = lock_start_time is not None and lock_remaining == 0
-
-        win_w, win_h = (720, 540)
-        if warped is not None and locked:
-            display = cv2.resize(warped, (win_w, win_h))
-            edges_w = compute_edges(display)
-            black_ratio = np.sum(edges_w < 20) / edges_w.size
-            is_on = black_ratio <= 0.85
-            state_label = "Screen ON" if is_on else "Screen OFF"
-            state_color = (0, 255, 0) if is_on else (0, 0, 255)
-            (tw, th), _ = cv2.getTextSize(state_label, cv2.FONT_HERSHEY_SIMPLEX, 0.9, 2)
-            cv2.putText(display, state_label, ((win_w - tw) // 2, win_h - 15),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.9, state_color, 2, cv2.LINE_AA)
-            cv2.putText(display, f"FPS: {fps:.1f}", (10, 30),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
-            cv2.imshow("Warped", display)
+                    alert = 'Screen detected'
         else:
-            placeholder = np.zeros((win_h, win_w, 3), dtype=np.uint8)
-            msg = f"Locking on... {lock_remaining:.1f}s" if lock_remaining > 0 else "No Screen Detected"
-            (tw, th), _ = cv2.getTextSize(msg, cv2.FONT_HERSHEY_SIMPLEX, 0.7, 2)
-            cv2.putText(placeholder, msg, ((win_w - tw) // 2, (win_h + th) // 2),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
-            cv2.imshow("Warped", placeholder)
+            smoothed = None
+            lock_until = 0.0
+            locked_in = False
+            alert = 'No laptop detected'
 
-        if cv2.waitKey(1) & 0xFF == 27:  # ESC to quit
+        if alert:
+            textsize = cv2.getTextSize(alert, cv2.FONT_HERSHEY_SIMPLEX, 1.0, 2)[0]
+            x = (frame.shape[1] - textsize[0]) // 2
+            y = 40
+            cv2.putText(frame, alert, (x, y), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 255, 0), 2)
+
+        if smoothed:
+            pts = np.array(smoothed, dtype=np.int32)
+            cv2.polylines(frame, [pts], True, (0, 200, 80), 2)
+            for p in smoothed:
+                cv2.circle(frame, p, 5, (0, 255, 0), -1)
+            warped = four_points_transform(frame, np.array(smoothed, dtype=np.float32))
+            from screen_state import show_state_window
+            show_state_window(warped)
+            if not locked_in and lock_until > now:
+                remaining = int(lock_until - now) + 1
+                timer_msg = f'Locking in: {remaining}s'
+                textsize = cv2.getTextSize(timer_msg, cv2.FONT_HERSHEY_SIMPLEX, 1.0, 2)[0]
+                x = (warped.shape[1] - textsize[0]) // 2
+                y = (warped.shape[0] + textsize[1]) // 2
+                cv2.putText(warped, timer_msg, (x, y), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 255, 255), 2)
+        else:
+            warped = np.zeros((600, 800, 3), dtype=np.uint8)
+            msg = 'No laptop detected'
+            textsize = cv2.getTextSize(msg, cv2.FONT_HERSHEY_SIMPLEX, 1.0, 2)[0]
+            x = (warped.shape[1] - textsize[0]) // 2
+            y = (warped.shape[0] + textsize[1]) // 2
+            cv2.putText(warped, msg, (x, y), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 0, 255), 2)
+
+        if settings.get("show_intersections") and smoothed:
+            for p in smoothed:
+                cv2.circle(lsd_vis, p, 5, (0, 0, 255), -1)
+
+        lsd_panel = lsd_vis if settings.get("show_lsd") else None
+        if not show_windows(frame, lsd_panel, warped):
             break
 
-    camera.release()
-    cv2.destroyAllWindows()
+    cam.release()
