@@ -2,7 +2,7 @@ import cv2
 import numpy as np
 
 
-def order_points(pts):
+def order_points(pts): # takes 4 points and orders them in consistent way: top-left, top-right, bottom-right, bottom-left
     pts = pts.reshape(4, 2).astype("float32")
     point_sums = pts.sum(axis=1)
     point_differences = np.diff(pts, axis=1).ravel()
@@ -14,7 +14,7 @@ def order_points(pts):
     ], dtype="float32")
 
 
-def four_points_transform(image, pts):
+def four_points_transform(image, pts): # applies a perspective transform to the image using the given 4 points
     ordered_points = order_points(pts)
     (top_left, top_right, bottom_right, bottom_left) = ordered_points
     output_width = max(int(np.linalg.norm(bottom_right - bottom_left)), int(np.linalg.norm(top_right - top_left)))

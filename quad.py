@@ -2,13 +2,13 @@ import numpy as np
 from collections import deque
 
 
-def make_quad_filter(alpha=0.25, median_len=5, max_reset_frac=0.45):
+def make_quad_filter(alpha=0.25, median_len=5, max_reset_frac=0.45): # returns a function that takes detected quad points and returns smoothed quad points, with parameters to control smoothing and reset behavior
     alpha = float(alpha)
     max_reset_frac = float(max_reset_frac)
     buf = deque(maxlen=int(median_len))
     prev = [None]
 
-    def update(detected):
+    def update(detected): 
         if detected is None:
             return None if prev[0] is None else [tuple(p) for p in prev[0].astype(int)]
 

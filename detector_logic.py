@@ -7,7 +7,7 @@ MIN_QUAD_H_FRAC = 0.10
 LSD_H_MAX_DEG = 30
 
 
-def compute_edges(frame):
+def compute_edges(frame): # Computes egde strenght map using Sobel edge detection, returns an array where each pixel value rep strength of edge (0-255)
     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
     blurred = cv2.GaussianBlur(gray, (5, 5), 0)
     sobel_x = cv2.Sobel(blurred, cv2.CV_32F, 1, 0, ksize=3)
@@ -17,7 +17,7 @@ def compute_edges(frame):
     return edge_strength.astype(np.uint8)
 
 
-def _run_lsd(edge_map):
+def _run_lsd(edge_map): # Comoputes Line segments using LSD algo, returns an array of line segments where each segment is represented by 4 values (x1, y1, x2, y2)
     lsd = cv2.createLineSegmentDetector(0)
     detected_lines, *_ = lsd.detect(edge_map)
     if detected_lines is None:
@@ -25,17 +25,17 @@ def _run_lsd(edge_map):
     return detected_lines.reshape(-1, 4)
 
 
-def _seg_length(seg):
+def _seg_length(seg): # gets the 4 values of line segment and returns length of segment as a float
     x1, y1, x2, y2 = seg
     return float(np.hypot(x2 - x1, y2 - y1))
 
 
-def _seg_angle_deg(seg):
+def _seg_angle_deg(seg): # gets the 4 values of line segment and returns angle of segment in degrees
     x1, y1, x2, y2 = seg
     return float(np.degrees(np.arctan2(y2 - y1, x2 - x1)) % 180)
 
 
-def _classify_segs(segs):
+def _classify_segs(segs): # retruns two lists of line segments, horizontal and vertical based on angles and sorts them by lenght in descending order
     min_vertical_angle = float(settings.lsd_v_min_deg)
     horizontal_lines = []
     vertical_lines = []
@@ -52,7 +52,7 @@ def _classify_segs(segs):
     return horizontal_lines, vertical_lines
 
 
-def _pick_v_pair(v_segs, frame_width):
+def _pick_v_pair(v_segs, frame_width): # picks the best matching pair (2) of verticle line segements to rep left and right edges of screen
     max_candidates = int(settings.lsd_v_candidates)
     match_tolerance = float(settings.lsd_v_match_tol)
     middle_x = frame_width / 2.0
@@ -86,7 +86,7 @@ def _pick_v_pair(v_segs, frame_width):
     return best_left_line, best_right_line
 
 
-def find_screen_quad(frame, edge_mask=None):
+def find_screen_quad(frame, edge_mask=None): # runs the full detection Logic to find 4 quads of screen, returns list (top-left, top-right, bottom-right, bottom-left) or None
     frame_height, frame_width = frame.shape[:2]
     if edge_mask is None:
         edge_mask = compute_edges(frame)
@@ -127,7 +127,7 @@ def find_screen_quad(frame, edge_mask=None):
     return [top_left, top_right, bottom_right, bottom_left]
 
 
-def validate_quad(quad, frame_shape):
+def validate_quad(quad, frame_shape): # validates the deteced quad points
     if quad is None:
         return 'no_laptop'
     top_left, top_right, bottom_right, bottom_left = quad
