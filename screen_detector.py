@@ -88,6 +88,15 @@ def run_screen_detector():
                         cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
             cv2.imshow("Warped", placeholder)
 
+        # Show detected quad edges in a separate window
+        quad_vis = frame.copy()
+        if smoothed is not None:
+            pts = np.array(smoothed, dtype=np.int32)
+            cv2.polylines(quad_vis, [pts], isClosed=True, color=(0, 255, 255), thickness=2)
+            for pt in pts:
+                cv2.circle(quad_vis, tuple(pt), 6, (0, 0, 255), -1)
+        cv2.imshow("Detected Quad", cv2.resize(quad_vis, (win_w, win_h)))
+
         if cv2.waitKey(1) & 0xFF == 27:  # ESC to quit
             break
 
